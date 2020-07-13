@@ -1,9 +1,23 @@
 /*
 --------------
-复赛demo（第N版）前向�?VIS6+3+out均衡负载
-搬砖工：蔡孟凯黄子明
-鲲鹏测试2000W数据集：23s / 读入建图3s / 输出1.8s / 其余dfs。修�?/ r金额出错的问�?
-时间�?020 / 04 / 30
+复赛   A榜rank3，B榜rank2（这里有故事，哈哈，懂的都懂）
+搬砖工：只想当守门员
+鲲鹏测试2000W数据集：23s / 读入建图3s / 输出1.8s / 其余dfs。修�?/ r金额出错的问�?
+    在正赛的基础上，新增转账金额浮动区间约束为[0.2, 3] ：循环转账的前后路径的转账金额
+浮动，不能小于0.2，不能大于3。如账户A转给账户B 转X元，账户B转给账户C转Y元， 那么进行
+循环检测时，要满足0.2 <= Y/X <= 3的条件。
+    复赛的代码主体和正赛的相同，主要加了一个金额约束，因此在读入数据时，需要读入第三列
+数据进行处理，这里文件给的/r/n有个小坑，需要避免。与正赛的思路区别在于采用了4+3代替了6+3
+的方式，数据结构由于已知出入度总数，故采用的前向星存图，前向星是一种更为高效的存图方式，
+通过head，map，以及maplen三个一维数组来存图，head记录起始的邻接边索引，map记录邻接节点，
+maplen用来记录每个节点的邻接节点数量，同时可以利用head，简化掉maplen，在使用时仅需两个
+一维数组即可。整体算法基于DFS+拓扑排序+逆序图剪枝的思路，在多线程任务分配方面，为了尽可
+能接近完美的负载均衡，采用atomic抢占节点的方式，分配线程任务，用一个数组维护多线程分配
+的任务顺序，在归并时可以实现有序合并线程结果。并且将结果的查表转换和数字转字符串两个操作，
+合并到buildremap中完成，即有利于dfs的时间减少，又减少了建立字符表的工作量。在结果output
+时，根据合并时得到的环长数量信息，更合理有效地分配多线程转换时的负载。
+    4+3:3层遍历逆序图，找到路径，4层正序遍历，成环后排序计入结果。
+	6+3:3层遍历逆序图标记，正序遍历6层，利用3层的标记剪枝。
 --------------
 */
 #include <iostream>
@@ -36,6 +50,13 @@ int item = CacheLineSize / sizeof(int);
 #define MAX_INSIZE     2000000 //数据量级(200W)
 #define MAX_OUTSIZE    20000000//数据量级(2000W)
 
+#define THREADBASELINE  8 * MAX_OUTSIZE * threadid
+#define RESOFFSET 8 * resnum
+#define MAX_pathnum 128
+
+#define MERGEOFFSET 8 * it[threadid] + 1
+#define SIZE threadbaseline + MERGEOFFSET - 1
+
 #ifdef TEST
 #include "timer.h"
 string testFile = "/data/test_data.txt";//_10000_40000
@@ -50,7 +71,7 @@ string MyanswerFile = "/projects/student/result.txt";//_10000_40000
 int threadreadline[4] = { 0 };//数据行数
 int readline;
 int pos[5];
-int *threadin_data[4];//4�̶߳�����
+int *threadin_data[4];//4�̶߳�����
 int in_data[MAX_INSIZE * 3];
 int NodeNum = 1;
 typedef unsigned int ui;
@@ -80,7 +101,7 @@ int *res4 = new int[4 * MAX_OUTSIZE];
 int *res5 = new int[5 * MAX_OUTSIZE];
 int *res6 = new int[6 * MAX_OUTSIZE];
 int *res7 = new int[7 * MAX_OUTSIZE];
-int *ans[5] = { res3,res4,res5,res6,res7 };//输出�?
+int *ans[5] = { res3,res4,res5,res6,res7 };//输出�?
 int anslen[8] = { 0 };
 char resultMap[11 * MAX_INSIZE];
 int length[THREADS_NUM] = { 0 };
@@ -135,7 +156,7 @@ bool fread_read(const string file)
 	int len = ftell(fp);
 	rewind(fp);
 	cout << "Loading" << endl;
-	char *buffer = new char[len];    //把所有字符一次全部读取到buf里面，包括‘\n�?
+	char *buffer = new char[len];    //把所有字符一次全部读取到buf里面，包括‘\n�?
 	if (fread(buffer, 1, len, fp) != len) {
 		cout << "read text_data failed" << endl;
 		return false;
@@ -338,9 +359,6 @@ inline bool pathcmp(path id1, path id2) {
 	if (id1.id2 != id2.id2)return id1.id2 < id2.id2;
 	return id1.id1 < id2.id1;
 }
-#define THREADBASELINE  8 * MAX_OUTSIZE * threadid
-#define RESOFFSET 8 * resnum
-#define MAX_pathnum 128
 void taowa7(int threadid, int resnum) {
 	int *pathsgn = new int[MAX_OUTSIZE];
 	mempath[threadid] = new path[NodeNum*MAX_pathnum];
@@ -359,31 +377,31 @@ void taowa7(int threadid, int resnum) {
 		i = tmp + 1;
 		if (NMaphead[i] == NMaphead[i + 1]) continue;
 		threadsPoint[i] = threadid;
-		head = i;//���ڵ�
+		head = i;//���ڵ�
 		itn1size = NMaphead[head + 1];
-		for (itn11 = NMaphead[head]; itn11 < itn1size; ++itn11) {//һ��ѭ��
+		for (itn11 = NMaphead[head]; itn11 < itn1size; ++itn11) {//һ��ѭ��
 			itn1 = NMap[itn11];
-			if (itn1.id <= head) continue;//�ýڵ������������
+			if (itn1.id <= head) continue;//�ýڵ������������
 
 			itn2size = NMaphead[itn1.id + 1];
-			for (itn22 = NMaphead[itn1.id]; itn22 <itn2size; ++itn22) {//����ѭ��
+			for (itn22 = NMaphead[itn1.id]; itn22 <itn2size; ++itn22) {//����ѭ��
 				itn2 = NMap[itn22];
-				if (!check(itn2.money, itn1.money) || itn2.id <= head) continue;//�ýڵ������������
+				if (!check(itn2.money, itn1.money) || itn2.id <= head) continue;//�ýڵ������������
 
 				itn3size = NMaphead[itn2.id + 1];
 				for (itn33 = NMaphead[itn2.id]; itn33 < itn3size; ++itn33) {
 					itn3 = NMap[itn33];
-					if (!check(itn3.money, itn2.money) || itn3.id < head || itn3.id == itn1.id) continue;//�ýڵ������������
+					if (!check(itn3.money, itn2.money) || itn3.id < head || itn3.id == itn1.id) continue;//�ýڵ������������
 					mempath[threadid][itn3.id*MAX_pathnum + pathnum[threadid][itn3.id]].id1 = itn1.id;
 					mempath[threadid][itn3.id*MAX_pathnum + pathnum[threadid][itn3.id]].id2 = itn2.id;
 					mempath[threadid][itn3.id*MAX_pathnum + pathnum[threadid][itn3.id]].money1 = itn1.money;
 					mempath[threadid][itn3.id*MAX_pathnum + pathnum[threadid][itn3.id]].money3 = itn3.money;
-					pathnum[threadid][itn3.id]++;//����
+					pathnum[threadid][itn3.id]++;//����
 					pathsgn[num] = itn3.id;
 					num++;
 				}
 			}
-		}//���仯4+3
+		}//���仯4+3
 		if (num == 0) continue;
 		sort(mempath[threadid] + head*MAX_pathnum, mempath[threadid] + head*MAX_pathnum + pathnum[threadid][head], pathcmp);
 		for (int j = 0; j < pathnum[threadid][head]; j++) {//3+0
@@ -459,7 +477,7 @@ void taowa7(int threadid, int resnum) {
 					it4size = Maphead[it3.id + 1];
 					for (it44 = Maphead[it3.id]; it44 < it4size; ++it44) {
 						it4 = Map[it44];
-						if (it4.id <= head || it4.id == it1.id || it4.id == it2.id || !check(it3.money, it4.money)) continue;//��������������
+						if (it4.id <= head || it4.id == it1.id || it4.id == it2.id || !check(it3.money, it4.money)) continue;//��������������
 
 						sort(mempath[threadid] + it4.id*MAX_pathnum, mempath[threadid] + it4.id*MAX_pathnum + pathnum[threadid][it4.id], pathcmp);
 						for (int j = 0; j < pathnum[threadid][it4.id]; j++) {//3+4
@@ -494,8 +512,6 @@ void taowa7(int threadid, int resnum) {
 	delete[]pathsgn;
 	pathsgn = NULL;
 }
-#define MERGEOFFSET 8 * it[threadid] + 1
-#define SIZE threadbaseline + MERGEOFFSET - 1
 void merge_res() {
 	int it[DFSTHREADS_NUM] = { 0 };
 	int threadid = 0;
@@ -570,7 +586,7 @@ void loadresult()
 	ui len = ftell(fp);
 	rewind(fp);
 	cout << "Loading" << endl;
-	char *buffer = new char[len];    //把所有字符一次全部读取到buf里面，包括‘\n�?
+	char *buffer = new char[len];    //把所有字符一次全部读取到buf里面，包括‘\n�?
 	if (fread(buffer, 1, len, fp) != len) {
 		cout << "read text_data failed" << endl;
 	}
@@ -580,7 +596,7 @@ void loadresult()
 	int countnum = 0;
 	for (int i = 0; i < len; i++) {
 		if (buffer[i] == '\n') {
-			countnum++;//一行数�?
+			countnum++;//一行数�?
 			p.push_back(nums);
 			result.push_back(p);
 			p.clear();
@@ -589,7 +605,7 @@ void loadresult()
 		}
 		if (buffer[i] == ',') {
 			p.push_back(nums);
-			countnum++;//一个数�?
+			countnum++;//一个数�?
 			nums = 0;
 			continue;
 		}
@@ -607,7 +623,7 @@ void loadresult()
 	len = ftell(fp1);
 	rewind(fp1);
 	cout << "Loading" << endl;
-	char *buffer1 = new char[len];    //把所有字符一次全部读取到buf里面，包括‘\n�?
+	char *buffer1 = new char[len];    //把所有字符一次全部读取到buf里面，包括‘\n�?
 	if (fread(buffer1, 1, len, fp1) != len) {
 		cout << "read text_data failed" << endl;
 	}
@@ -617,7 +633,7 @@ void loadresult()
 	countnum = 0;
 	for (int i = 0; i < len; i++) {
 		if (buffer1[i] == '\n') {
-			countnum++;//一行数�?
+			countnum++;//一行数�?
 			p.push_back(nums);
 			Myresult.push_back(p);
 			p.clear();
@@ -626,7 +642,7 @@ void loadresult()
 		}
 		if (buffer1[i] == ',') {
 			p.push_back(nums);
-			countnum++;//一个数�?
+			countnum++;//一个数�?
 			nums = 0;
 			continue;
 		}
