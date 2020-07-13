@@ -1,7 +1,16 @@
 /*
 --------------
 finalBaseline 2020.5.21
-多线程建图+dij优先队列+0n3合并查Cn
+    通过金融风控的资金流水分析，可有效识别每个账号的位置关键中心性，辅助公安挖掘洗钱组织，帮助银行预防信
+用卡诈骗。基于给定的资金流水，精确计算每个账号的位置关键中心性，并输出TOP 100的账户信息。结果准确，用时最
+短者胜。（网络中心性网上可搜到）
+    中心性计算是一个数学公式，如果直接安装定义，采用floyd算法来算的话，复杂度得O（n3）要算几个小时，十分
+低效。通过论文查阅，可以发现有一篇比较经典的论文对中心性更新算法进行了研究，可以用更好的复杂度计算出中心性。
+此后团队开始查阅论文的日子......但是这种质的飞跃的发现很难了。整体采用的是DIJ+新算法更新，在建图的时候加上
+了一个极端情况的剪枝，既当入度为0时且出度为1的的节点，跳过该节点，可以有效减少稀疏图的时间，并且按bfs节点排
+序，可以使dij的性能更快（减少cachemiss）；dij时，vis采用了char型存储，压缩空间，当vis！=time_label时，即
+代表没访问，且该策略无需清零，当i==255时，重置time_label的值；整个dij为了更好地适应数据集，采用了两种不同
+变量类型的值，从而压缩空间，提升cache命中。最后的排序是用选择排序，直接选出TOP100，o（n）。
 --------------
 */
 
@@ -266,7 +275,6 @@ edge NEWMap[MAX_INSIZE + 1];//前向星各点及出度点
 edge NEWNMap[MAX_INSIZE + 1];//前向星入度点
 
 
-
 uint32_t insize = 0;
 uint32_t outsize = 0;
 uint16_t Kn[MAX_INSIZE + 1] = { 0 };
@@ -278,7 +286,7 @@ int readline;//读入数据长度
 int pos[5];//初始建图记录各线程len范围
 
 
-		   //图2采用数据结构及大小
+		    //图2采用数据结构及大小
 uint32_t pre[DIJTHREADS_NUM][MAX_INSIZE + 1];//类逆邻接表存储前驱结点
 uint32_t *pres[DIJTHREADS_NUM];
 uint16_t dis[DIJTHREADS_NUM][MAX_INSIZE + 1];
@@ -297,7 +305,7 @@ double tmpAnsd[DIJTHREADS_NUM][MAX_INSIZE + 1] = { 0.0 };
 char *outbuff[THREADS_NUM];//多线程输出buffer
 int length[THREADS_NUM] = { 0 };//buffer长度
 atomic<uint32_t>threadCount(0);//dij原子变量
-							   /***进度条***/
+							/***进度条***/
 char bar[101];
 int barCount = 0;
 double barNow = 0.0;
