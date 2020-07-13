@@ -1,9 +1,27 @@
 /*
-2020421对  score：1.682
-path变一维数组
-result变数组，结果不排序（提前排序）
-__优化IO/建图
-dfs中 减少变量赋值，减少
+    通过金融风控的资金流水分析，可有效识别循环转账，辅助公安挖掘洗钱组织，帮助
+银行预防信用卡诈骗。基于给定的资金流水，检测并输出指定约束条件的所有循环转账，
+结果准确，用时最短者胜。
+    输入为包含资金流水的文本文件，每一行代表一次资金交易记录，包含本端账号ID,
+对端账号ID, 转账金额，用逗号隔开。
+    本端账号ID和对端账号ID为一个32位的无符号整数
+    转账金额为一个32位的无符号整数
+    转账记录最多为28万条
+    每个账号平均转账记录数< 10
+    账号A给账号B最多转账一次
+	循环转账的路径长度最小为3（包含3）最大为7（包含7），例如账户A给账户B转账，
+账户B给账户A转账，循环转账的路径长度为2，不满足循环转账条件。
+2020421  score：0.19+s  rank:7  base:武长赛区   team_name：只想当守门员
+    整体思路：利用邻接表和逆邻接表的关系，减少dfs的层数，即可减小时间开销。首先
+讲读入数据建立图（这里将邻接表换成了一维数组形式的邻接表提升效率，减少cachemiss）
+提前将一维邻接表中的节点进行排序(拓扑排序)，在后续遍历时若cur<head则返回，采用这
+种方式也无需尾排序，有效剪枝并减少开支。多线程任务分配思路是将节点间隔分开（无额外
+开销）+=threadid，使得避免线程出现多等一的情况，且合并简单，遍历答案一次即可。在
+循环的时候，采用2+5策略，既逆序遍历两层图，寻找可能存在的环路，然后正序遍历5层，将
+其中3-7层环从中间接头，依次找出。
+    整个过程中，还有很多小细节会影响代码的速度，比如数字字符串转换时，采用了查表的
+方式，函数调用时，用指针传递或引用传递减少变量复制产生的开销等等，还有一些群消息共享
+的小技巧哈哈。
 */
 #include <iostream>
 #include <vector>
@@ -23,20 +41,20 @@ dfs中 减少变量赋值，减少
 
 using namespace std;
 typedef unsigned int ui;
-#define CacheLineSize 128
-int item = CacheLineSize / sizeof(int);
+#define CacheLineSize 128 //L1缓存大小
+int item = CacheLineSize / sizeof(int);//字节对齐
 //#define TEST
-
+//宏定义
 #define THREADS_NUM   4
 #define MAX_INSIZE     280000 //数据量级(28W)
 #define MAX_MAPNODE    220000 //地图节点量级(28W)
 #define MAX_OUTSIZE   3000000 //数据量级(300W)
-#define MAX_SIZE  50//出入度55
-#define MAX_pathnum  20
-#define THREADBASELINE  8 * MAX_OUTSIZE * threadid
-#define RESOFFSET 8 * threadNUM[threadid]
-#define MERGEOFFSET 8 * it[threadid]
-#define SIZE THREADBASELINE + MERGEOFFSET + 7
+#define MAX_SIZE  50 //出入度55
+#define MAX_pathnum  20 //最大节点路径数量
+#define THREADBASELINE  8 * MAX_OUTSIZE * threadid //线程写 基址
+#define RESOFFSET 8 * threadNUM[threadid] //线程写 偏移
+#define MERGEOFFSET 8 * it[threadid] //合并线程  偏移
+#define SIZE THREADBASELINE + MERGEOFFSET + 7 //线程数据长度位
 
 //路径
 #ifdef TEST
@@ -71,7 +89,7 @@ char *outbuff[THREADS_NUM];
 int length[THREADS_NUM] = { 0 };
 
 
-int threadres[8 * MAX_OUTSIZE * THREADS_NUM ];
+int threadres[8 * MAX_OUTSIZE * THREADS_NUM ];//数据设计：第1-7位为节点，第8位为环长信息
 int threadNUM[THREADS_NUM] = { 0 };
 int* res3 = new int[3 * 500000];
 int* res4 = new int[4 * 500000];
